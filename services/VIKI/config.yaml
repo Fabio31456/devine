@@ -1,0 +1,10 @@
+endpoints: 
+  episode_metadata: https://api.viki.io/v4/containers/{id}/episodes.json?direction=asc&with_upcoming=false&sort=number&page={pagenumber}&per_page=1000&app=100000a
+  video_metadata: https://api.viki.io/v4/videos/{id}.json?app=100000a
+  mpd_api: https://www.viki.com/api/videos/{id}
+  search_endpoint_url: https://api.viki.io/v4/search.json
+
+browser:
+  user-agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36 OPR/107.0.0.0
+  x-viki-app-ver: 14.10.0
+  x-viki-as-id: 100000a-1709757058757-0fb4be98-a04e-47b2-a80b-2dfe75cc6376

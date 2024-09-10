@@ -1,0 +1,269 @@
+import json
+import logging
+import re
+from abc import ABCMeta, abstractmethod
+from http.cookiejar import CookieJar
+from typing import Optional, Union
+from urllib.parse import urlparse
+import click
+import requests
+from requests.adapters import HTTPAdapter, Retry
+from rich.padding import Padding
+from rich.rule import Rule
+from devine.core.service import Service
+from devine.core.titles import Movies, Movie, Titles_T, Title_T, Series, Episode
+from devine.core.cacher import Cacher
+from devine.core.config import config
+from devine.core.console import console
+from devine.core.constants import AnyTrack
+from devine.core.credential import Credential
+from devine.core.tracks import Chapters, Tracks
+from devine.core.utilities import get_ip_info
+from devine.core.manifests import HLS, DASH
+from devine.core.utils.collections import as_list
+
+class DSNP(Service):
+    """
+    Service code for Disney+
+
+    Written by TPD94
+
+    Authorization: Login
+
+    Security: HD@L3
+    """
+
+    GEOFENCE = ('')
+
+    # Static method, this method belongs to the class
+    @staticmethod
+
+    # The command name, must much the service tag (and by extension the service folder)
+    @click.command(name="DSNP", short_help="https://disneyplus.com", help=__doc__)
+
+    # Using series ID for Disney+
+    @click.argument("title", type=str)
+
+    # Option if it is a movie
+    @click.option("--movie", is_flag=True, help="Specify if it's a movie")
+
+    # Pass the context back to the CLI with arguments
+    @click.pass_context
+    def cli(ctx, **kwargs):
+        return DSNP(ctx, **kwargs)
+
+    # Accept the CLI arguments by overriding the constructor (The __init__() method)
+    def __init__(self, ctx, title, movie):
+
+        # Pass the series_id argument to self so it's accessable across all methods
+        self.title = title
+
+        self.movie = movie
+        
+        # Initialize variable for credentials
+        self.credential = None
+
+        # Overriding the constructor
+        super().__init__(ctx)
+
+    # Define authenticate function
+    def authenticate(self, cookies: Optional[CookieJar] = None, credential: Optional[Credential] = None) -> None:
+
+        # Set API url
+        api_url = 'https://disney.api.edge.bamgrid.com/graph/v1/device/graphql'
+        
+        # Load credential for the whole session
+        if self.credential is None:
+            self.credential = credential
+
+        # Set first (public) header for device registration
+        headers = {
+            'authorization': 'Bearer ZGlzbmV5JmJyb3dzZXImMS4wLjA.Cu56AgSfBTDag5NiRA81oLHkDZfu5L3CKadnefEAY84',
+        }
+
+        # Set first (public) json data for device registration
+        json_data = {
+            'operationName': 'registerDevice',
+            'query': 'mutation registerDevice($input: RegisterDeviceInput!) {\n            registerDevice(registerDevice: $input) {\n                grant {\n                  grantType\n                  assertion\n                },\n                activeSession {\n                  partnerName\n                  profile {\n                    id\n                  }\n                }\n            }\n        }',
+            'variables': {
+                'input': {
+                    'deviceFamily': 'browser',
+                    'applicationRuntime': 'firefox',
+                    'deviceProfile': 'windows',
+                    'deviceLanguage': 'en',
+                    'attributes': {
+                        'brand': 'web',
+                        'operatingSystem': 'n/a',
+                        'operatingSystemVersion': 'n/a',
+                    },
+                },
+            },
+        }
+
+        # Get the device registartion auth token
+        register_auth = requests.post(url=api_url, json=json_data, headers=headers).json()['extensions']['sdk']['token']['accessToken']
+
+        # Set headers for login
+        headers = {
+            'authorization': f'{register_auth}',
+        }
+
+        # Set json for login
+        json_data = {
+            'query': '\n    mutation login($input: LoginInput!) {\n        login(login: $input) {\n            actionGrant\n            account {\n              activeProfile {\n                id\n              }\n              profiles {\n                id\n                attributes {\n                  isDefault\n                  parentalControls {\n                    isPinProtected\n                  }\n                }\n              }\n            }\n            activeSession {\n              isSubscriber\n            }\n            identity {\n              personalInfo {\n                dateOfBirth\n                gender\n              }\n              flows {\n                personalInfo {\n                  requiresCollection\n                  eligibleForCollection\n                }\n              }\n            }\n        }\n    }\n',
+            'variables': {
+                'input': {
+                    'email': f'{credential.username}',
+                    'password': f'{credential.password}',
+                },
+            },
+            'operationName': 'login',
+        }
+
+        # Get the login auth token
+        login_auth = requests.post(url='https://disney.api.edge.bamgrid.com/v1/public/graphql', json=json_data, headers=headers).json()['extensions']['sdk']['token']['accessToken']
+
+        # Pick the first profile
+        profile = requests.post(url='https://disney.api.edge.bamgrid.com/v1/public/graphql', json=json_data, headers=headers).json()['data']['login']['account']['profiles'][5]['id']
+
+        # Set the headers to switch profiles
+        headers = {
+            'authorization': f'{login_auth}',
+        }
+
+        # Set the json data to switch profiles
+        json_data = {
+            'query': '\n  mutation switchProfile($input: SwitchProfileInput!) {\n    switchProfile(switchProfile: $input) {\n      account {\n        activeProfile {\n          name\n        }\n      }\n    }\n  }\n',
+            'variables': {
+                'input': {
+                    'profileId': f'{profile}',
+                },
+            },
+            'operationName': 'switchProfile',
+        }
+
+        # Get the profile auth refresh token
+        profile_auth = requests.post(url='https://disney.api.edge.bamgrid.com/v1/public/graphql', json=json_data, headers=headers).json()['extensions']['sdk']['token']['refreshToken']
+
+        # Set the headers to get an auth bearer token
+        headers = {
+            'authorization': 'ZGlzbmV5JmJyb3dzZXImMS4wLjA.Cu56AgSfBTDag5NiRA81oLHkDZfu5L3CKadnefEAY84',
+        }
+
+        # Set the json data to get an auth bearer token
+        json_data = {
+            'query': 'mutation refreshToken($input:RefreshTokenInput!){refreshToken(refreshToken:$input){activeSession{sessionId}}}',
+            'variables': {
+                'input': {
+                    'refreshToken': f'{profile_auth}',
+                },
+            },
+            'operationName': 'refreshToken',
+        }
+
+        # Get the bearer token
+        bearer = requests.post(url=api_url, json=json_data, headers=headers).json()['extensions']['sdk']['token']['accessToken']
+
+        # Set the bearer token in headers dictionary
+        headers = {
+            'authorization': f'Bearer {bearer}'
+        }
+
+        # Update the session with the auth bearer headers
+        self.session.headers.update(headers)
+
+    def get_titles(self) -> Titles_T:
+
+        # Get the title metadata
+        title_metadata = self.session.get(f'https://disney.api.edge.bamgrid.com/explore/v1.2/page/{self.title}').json()
+
+        # Check if --movie was used
+        if self.movie:
+            movie_metadata = self.session.get(url=f'https://disney.api.edge.bamgrid.com/explore/v1.2/page/{self.title}').json()
+            movie = Movie(
+                id_=movie_metadata['data']['page']['id'],
+                service=self.__class__,
+                name=movie_metadata['data']['page']['visuals']['title'],
+                year=movie_metadata['data']['page']['visuals']['metastringParts']['releaseYearRange']['startYear'],
+                data={'resourceId': movie_metadata['data']['page']['actions'][0]['resourceId']}
+            )
+            return Movies([movie])
+
+        else:
+            # Set empty list for episodes
+            all_episodes = []
+
+            # Iterate through the seasons
+            for season_num in title_metadata['data']['page']['containers'][0]['seasons']:
+
+                # Grab the season metadata
+                season_metadata = self.session.get(url=f'https://disney.api.edge.bamgrid.com/explore/v1.2/season/{season_num["id"]}').json()
+
+                # Iterate through each episode
+                i = 0
+                for episode_num in season_metadata['data']['season']['items']:
+                    all_episodes.append(Episode(id_=episode_num['id'],
+                                                service=self.__class__,
+                                                title=episode_num['visuals']['title'],
+                                                season=episode_num['visuals']['seasonNumber'],
+                                                number=episode_num['visuals']['episodeNumber'],
+                                                name=episode_num['visuals']['episodeTitle'],
+                                                year=episode_num['visuals']['metastringParts']['releaseYearRange']['startYear'],
+                                                data={'resourceId': self.session.get(f'https://disney.api.edge.bamgrid.com/explore/v1.2/deeplink?action=playback&refId={episode_num["id"]}&refIdType=deeplinkId').json()['data']['deeplink']['actions'][0]['resourceId']}
+                                                ))
+                    i += 1
+
+            # Return the episodes
+            return Series(all_episodes)
+
+    def get_tracks(self, title: Title_T) -> Tracks:
+
+        # Set the headers to grab the m3u
+        self.session.headers['x-dss-feature-filtering'] = 'true'
+        self.session.headers['x-application-version'] = '1.1.2'
+        self.session.headers['x-bamsdk-client-id'] = 'disney-svod'
+        self.session.headers['x-bamsdk-platform'] = 'javascript/windows/firefox'
+        self.session.headers['x-bamsdk-version'] = '28.0'
+
+        # Set the JSON to grab the m3u
+        json_data = {
+            'playback': {
+                'attributes': {
+                    'resolution': {
+                        'max': [
+                            '1280x720',
+                        ],
+                    },
+                    'protocol': 'HTTPS',
+                    'assetInsertionStrategy': 'SGAI',
+                    'playbackInitiationContext': 'ONLINE',
+                    'frameRates': [
+                        60,
+                    ],
+                },
+            },
+            'playbackId': f'{title.data["resourceId"]}',
+        }
+
+        # Grab the metadata
+        title_metadata = self.session.post(url='https://disney.playback.edge.bamgrid.com/v7/playback/ctr-limited', json=json_data).json()
+
+        # Grab the m3u
+        title_m3u = title_metadata['stream']['sources'][0]['complete']['url']
+
+        # Convert the m3u to tracks
+        tracks = HLS.from_url(url=title_m3u).to_tracks(language="en")
+
+        # Format the bitrate
+        for audio in tracks.audio:
+            bitrate = re.search(r"(?<=r/composite_)\d+|\d+(?=_complete.m3u8)", as_list(audio.url)[0])
+            audio.bitrate = int(bitrate.group()) * 10000
+
+        # Return the tracks
+        return tracks
+
+    def get_chapters(self, title: Title_T) -> Chapters:
+        return []
+
+    def get_widevine_license(self, *, challenge: bytes, title: Title_T, track: AnyTrack) -> Optional[Union[bytes, str]]:
+        return self.session.post(url='https://disney.playback.edge.bamgrid.com/widevine/v1/obtain-license', data=challenge).content

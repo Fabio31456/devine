@@ -1,0 +1,272 @@
+import json
+import logging
+import re
+from abc import ABCMeta, abstractmethod
+from http.cookiejar import CookieJar
+from typing import Optional, Union
+from urllib.parse import urlparse
+import click
+import requests
+from requests.adapters import HTTPAdapter, Retry
+from rich.padding import Padding
+from rich.rule import Rule
+from devine.core.service import Service
+from devine.core.titles import Movies, Movie, Titles_T, Title_T, Series, Episode
+from devine.core.cacher import Cacher
+from devine.core.config import config
+from devine.core.console import console
+from devine.core.constants import AnyTrack
+from devine.core.credential import Credential
+from devine.core.tracks import Chapters, Tracks
+from devine.core.utilities import get_ip_info
+from devine.core.manifests import HLS, DASH
+from devine.core.utils.collections import as_list
+
+class DSNP(Service):
+    """
+    Service code for Disney+
+
+    Written by TPD94
+
+    Authorization: Login
+
+    Security: HD@L3
+    """
+
+    GEOFENCE = ('')
+
+    # Static method, this method belongs to the class
+    @staticmethod
+
+    # The command name, must much the service tag (and by extension the service folder)
+    @click.command(name="DSNP", short_help="https://disneyplus.com", help=__doc__)
+
+    # Using series ID for Disney+
+    @click.argument("title", type=str)
+
+    # Option if it is a movie
+    @click.option("--movie", is_flag=True, help="Specify if it's a movie")
+
+    # Pass the context back to the CLI with arguments
+    @click.pass_context
+    def cli(ctx, **kwargs):
+        return DSNP(ctx, **kwargs)
+
+    # Accept the CLI arguments by overriding the constructor (The __init__() method)
+    def __init__(self, ctx, title, movie):
+
+        # Pass the series_id argument to self so it's accessable across all methods
+        self.title = title
+
+        self.movie = movie
+        
+        # Initialize variable for credentials
+        self.credential = None
+
+        # Overriding the constructor
+        super().__init__(ctx)
+
+    # Define authenticate function
+    def authenticate(self, cookies: Optional[CookieJar] = None, credential: Optional[Credential] = None) -> None:
+
+        # Set API url
+        api_url = 'https://disney.api.edge.bamgrid.com/graph/v1/device/graphql'
+        
+        # Load credential for the whole session
+        if self.credential is None:
+            self.credential = credential
+
+        # Set first (public) header for device registration
+        headers = {
+            'authorization': 'Bearer ZGlzbmV5JmJyb3dzZXImMS4wLjA.Cu56AgSfBTDag5NiRA81oLHkDZfu5L3CKadnefEAY84',
+        }
+
+        # Set first (public) json data for device registration
+        json_data = {
+            'operationName': 'registerDevice',
+            'query': 'mutation registerDevice($input: RegisterDeviceInput!) {\n            registerDevice(registerDevice: $input) {\n                grant {\n                  grantType\n                  assertion\n                },\n                activeSession {\n                  partnerName\n                  profile {\n                    id\n                  }\n                }\n            }\n        }',
+            'variables': {
+                'input': {
+                    'deviceFamily': 'browser',
+                    'applicationRuntime': 'firefox',
+                    'deviceProfile': 'windows',
+                    'deviceLanguage': 'en',
+                    'attributes': {
+                        'brand': 'web',
+                        'operatingSystem': 'n/a',
+                        'operatingSystemVersion': 'n/a',
+                    },
+                },
+            },
+        }
+
+        # Get the device registartion auth token
+        tmp = requests.post(url=api_url, json=json_data, headers=headers).json()
+        #print(tmp)
+        #register_auth = print['extensions']['sdk']['token']['accessToken']
+	register_auth = 'eyJ6aXAiOiJERUYiLCJraWQiOiJ0Vy10M2ZQUTJEN2Q0YlBWTU1rSkd4dkJlZ0ZXQkdXek5KcFFtOGRJMWYwIiwiY3R5IjoiSldUIiwiZW5jIjoiQzIwUCIsImFsZyI6ImRpciJ9..E1gmb1wZp-mQggDd.aQCeIOvW-JeyBNVGGqBEF6tTDBLRHtCYmSwcUiZlCwMzWJfDWJbSDkrtS8X-sscxPJ9pXKEc7Jz7OlcZe0xNQp7agwe1eFSeo7Xgf1UqPZ02kFs3LOMe31Bv-K4YwdUCcKlkCoKxSVHOLA4IABhpLpPiToGbg-w8AJ7znZRZpxTyY7DJ4N7HxfSCw4JnTLBSHQYhoAhWbPXAIFE-WvJ0ef5FdF39ByWdpev70xy8Icx2b6qeQP213VakNczd4y7s7wPQuJTdkjaz4uXNDF8VXrxUy0DSEypSetNy4I5clQFHV-whH0LsCRb3nX4bWAggMhM2M5em816YxtIbmHknUdhVvSoQYdViXeV1ywj4MiX8huW_CqWDy6TQ_cYMyiWvit2Q4UrPQDohA3qJq6_1DEbqsV-1iY8h1HK45zTeebX12ge1bgJzT-obQFu4FAqFEmnW0EjAg2EkUPNNnlvBCQSlJ-EmQ9lMO5qPM7bLAlSDn325wxnkVpMuWEA4dJgvu0Ls-mctq2WY0gj-r5vabk7RDcCZH8wjLERyF1TyjfM0NIM78nR0xUHIm6U-KgY4ubFC05_INzfucmUlhQog2Z2cl84rv2wM6QU7g7-otVy8HxajGkAtAqjeFOizsDsrza2WaheFi1lUG4yitN-yNmov9TlQmNemERQcd3gfm_ASQ8t5WgDMzj1ymybW6di2Oz8UF9SfT85V3Rq9PHc2hFyP7gHpdqYhbECAYdfU9WQbO0Xiofjujb3R2c6-VwNwQie3RIEzNgB1RAgbnmDba3NIp8PozCAlLU9LHBhsJCzmCDjQHvqPl660ujtd3CamkWHfX7XLSwwYrhEOQncTFRSHb1Wt3_Ie0UlRRsdLAmiikXlvIzWMrmjjDPWA6jYfeKHAqDARoNJgWnHYOcdOxMLhxB9KTkpVSMup4Ay2MNaRHVKBJUSBeU05Bfvka1GTLJqWn41s2qTlwOCzMwJvhRTrQ1TVgskYgPJqU5RYsbG54tqNPtC89PrMu4Job8pletKElsvEcfeUI4ugZHyFscaWrNTXyvBg52sFjxGpNOm6R0qKq6bzjk-7zzpLJDwa6iqvi793af2SdLdsUu9jle7LQ_psrxCnQFXxf0uQKIVbKjqbmnYaDoUDPpHELVs9mIfvbbMbdcJJiAM7pNh6Lyspr_4FFcORsba8wJG0Z_XEAws9GC1jR9cUgexvnv5tuCa4Jz6Sk13lU92o8hDa0IbeBsQZ5CNJdAMeJAkv81dey8cUueTdReya8SLhcd0_bXQYXx1T80TXvOr-pkFX2EZKNdSG4aqbMtL6twdxPeqHGnUUkEzjHeQdJggltU1Gmz1GiPOntPsJhTPO1Q-aHbCbyaFMcEVNvmQB1wBtJItkhamDzVZw6hTM5uAWjGOPqtzUvkaEGEiIOmQBcW1quXVCLTv64fcPq3n4Bbl-Du4jKcV5_aM_gDujZKmxA5WxwjgTwelnXQMXCWzw4oAjCtV600QankR9cPX0yIIAIISvJvavRWlU4BdBVEdJcHZM9fUQLhWBaDD3gIruamqZybIerxKUFUH5bn9e2skwkyTEm7QYLYXWzpoVwDoHzVUvccP4w5-GY9Y7c5vdOnrfVYJyblF85LU86e3dylQCenJrWK3yQlghA81RsqUpvYMSUypst5meEKGbwYqFdihfeXb8sEkJgnqWSKe4ugKCci5cTkxUDUpEJnC3uSgOb-PmOyV28xwKDdjPnt9OrKDq067WEI8V9pSdKq4qnbBYdbEpi3NM_-EYkZamVw5goh16eDg-W9nWFe3Wk2i0fP_09npngCjmrrzuHXyBpBvwOleqmsuI9AGKimKaS61YXNzPUEDz56fsqGivrHgIRGAsAtOFy7kqzwYG9ys84IjDSkG8WhtR7kmizprifPEwGiTeva7dkEIX4iUZOy1zukWgbNlo-MZq_jC3TWag5d73f4IRoZegTQi7PCxHPelQMJYfIn_DQGHDK8gKcbA5tmlIU2IQxieFnU1PWclNcX59fbD3XUsTKtfsugI-Jabj5Skc-WnOtxT5q4ucYl38_czYvo8dxUf_KntMmQ1-CnJNJZM2kBL9zQZMlrr_R0DqoxfKemOyP27t63-T_HhZsyBh1SYGd_9vwlej8hwpUbGNY10ZSjalMVMk8__Ih75QLjv31iAf1mJ7ETKzHbxigO_5imCzTAKypaSf4Lno2m4CpRAA2kAzyIOGRdVLZqquvDt_adylW-aVDWCGeKzFF2I6jw68qf5DbP75nDBKWkS3jb5Ja7y-ouGPkL6ms6jnA5jku7nGXMrwF90V3yx76p_wQifOxImAc12iUC28fieeNOLpOof-Zju92Uk52_YGHR-_J0GrkmlegS_BG0QxDVYzyB5j4WNI4YV1cc4HRJ0HdORnChRfO7cm6FYk1aHAwZN-e4U-wgBUKQ1bYw9iQl9DiX-2pfvoYdK3l4Bq0qpFhmNNMUdr84HeYC3QuIkusudaHOmibF77EbTljfax8mXW4Djuo8ERbIwl3yhcgt4xJZNu-TAPOxoiZkV24_TN_JuiV9gUbMyyaQb3L_t_ogpll9tr1Of8tqE0bX-drw8qFhqgtvXuXkCRyoWPwAd7lktJC4jjAoQJ9yRHslVkBzeJf8IkKJ0ietnnJxYnqQziiYLo18Ph0KUmWTvyy9v0cUqrx2uqolOMPc-LJG3MzSxfHfgW6GA1KXpd-xdYVXs6t3bWs9NIwWSZxZT28CAvke3s-zh3SybuJD67EpPoP-hTqiI0SlTT0Gn39Ux7CXGvR08BPys-WJeh8A8yQJMmYzo_Um5jSZw2rBOMpwdPmztcfSlPt6T9xax3VhIVT8YpNlSG4SbDOl3FlUEsnYoCLQ-L2pUb4uqpizYlUmtcqnGJImsZBZ2W4R6FCJ8VWCwFrEAMJBw1odLSFtotLM2LS1urlKCj2FFwTCaiGdR824ZUIraAJGsQQSwG6XnNzfZtTIogwKkX9brxdgN5MSh5wqbFJYBp4bLHq12NdXWrJ4_RGvfMOm19yXemGaAkjq5Ol2fkUxu7_Ch_zezzL8GqOaePcJ4E2330_Nz99UmFl8pgfF0wwyzjiK_G4zPaubuDXJ4qp1mBZOzAvGQGv3AWup0u9bwiyO68IkLQEQdOb2g1.GVrF18Do3oA-5wfxvel29Q'
+
+        # Set headers for login
+        headers = {
+            'authorization': f'{register_auth}',
+        }
+
+        # Set json for login
+        json_data = {
+            'query': '\n    mutation login($input: LoginInput!) {\n        login(login: $input) {\n            actionGrant\n            account {\n              activeProfile {\n                id\n              }\n              profiles {\n                id\n                attributes {\n                  isDefault\n                  parentalControls {\n                    isPinProtected\n                  }\n                }\n              }\n            }\n            activeSession {\n              isSubscriber\n            }\n            identity {\n              personalInfo {\n                dateOfBirth\n                gender\n              }\n              flows {\n                personalInfo {\n                  requiresCollection\n                  eligibleForCollection\n                }\n              }\n            }\n        }\n    }\n',
+            'variables': {
+                'input': {
+                    'email': f'{credential.username}',
+                    'password': f'{credential.password}',
+                },
+            },
+            'operationName': 'login',
+        }
+
+        # Get the login auth token
+        login_auth = requests.post(url='https://disney.api.edge.bamgrid.com/v1/public/graphql', json=json_data, headers=headers).json()['extensions']['sdk']['token']['accessToken']
+
+        # Pick the first profile
+        profile = requests.post(url='https://disney.api.edge.bamgrid.com/v1/public/graphql', json=json_data, headers=headers).json()['data']['login']['account']['profiles'][5]['id']
+
+        # Set the headers to switch profiles
+        headers = {
+            'authorization': f'{login_auth}',
+        }
+
+        # Set the json data to switch profiles
+        json_data = {
+            'query': '\n  mutation switchProfile($input: SwitchProfileInput!) {\n    switchProfile(switchProfile: $input) {\n      account {\n        activeProfile {\n          name\n        }\n      }\n    }\n  }\n',
+            'variables': {
+                'input': {
+                    'profileId': f'{profile}',
+                },
+            },
+            'operationName': 'switchProfile',
+        }
+
+        # Get the profile auth refresh token
+        profile_auth = requests.post(url='https://disney.api.edge.bamgrid.com/v1/public/graphql', json=json_data, headers=headers).json()['extensions']['sdk']['token']['refreshToken']
+
+        # Set the headers to get an auth bearer token
+        headers = {
+            'authorization': 'ZGlzbmV5JmJyb3dzZXImMS4wLjA.Cu56AgSfBTDag5NiRA81oLHkDZfu5L3CKadnefEAY84',
+        }
+
+        # Set the json data to get an auth bearer token
+        json_data = {
+            'query': 'mutation refreshToken($input:RefreshTokenInput!){refreshToken(refreshToken:$input){activeSession{sessionId}}}',
+            'variables': {
+                'input': {
+                    'refreshToken': f'{profile_auth}',
+                },
+            },
+            'operationName': 'refreshToken',
+        }
+
+        # Get the bearer token
+        bearer = requests.post(url=api_url, json=json_data, headers=headers).json()['extensions']['sdk']['token']['accessToken']
+
+        # Set the bearer token in headers dictionary
+        headers = {
+            'authorization': f'Bearer {bearer}'
+        }
+
+        # Update the session with the auth bearer headers
+        self.session.headers.update(headers)
+
+    def get_titles(self) -> Titles_T:
+
+        # Get the title metadata
+        title_metadata = self.session.get(f'https://disney.api.edge.bamgrid.com/explore/v1.2/page/{self.title}').json()
+
+        # Check if --movie was used
+        if self.movie:
+            movie_metadata = self.session.get(url=f'https://disney.api.edge.bamgrid.com/explore/v1.2/page/{self.title}').json()
+            movie = Movie(
+                id_=movie_metadata['data']['page']['id'],
+                service=self.__class__,
+                name=movie_metadata['data']['page']['visuals']['title'],
+                year=movie_metadata['data']['page']['visuals']['metastringParts']['releaseYearRange']['startYear'],
+                data={'resourceId': movie_metadata['data']['page']['actions'][0]['resourceId']}
+            )
+            return Movies([movie])
+
+        else:
+            # Set empty list for episodes
+            all_episodes = []
+
+            # Iterate through the seasons
+            for season_num in title_metadata['data']['page']['containers'][0]['seasons']:
+
+                # Grab the season metadata
+                season_metadata = self.session.get(url=f'https://disney.api.edge.bamgrid.com/explore/v1.2/season/{season_num["id"]}').json()
+
+                # Iterate through each episode
+                i = 0
+                for episode_num in season_metadata['data']['season']['items']:
+                    all_episodes.append(Episode(id_=episode_num['id'],
+                                                service=self.__class__,
+                                                title=episode_num['visuals']['title'],
+                                                season=episode_num['visuals']['seasonNumber'],
+                                                number=episode_num['visuals']['episodeNumber'],
+                                                name=episode_num['visuals']['episodeTitle'],
+                                                year=episode_num['visuals']['metastringParts']['releaseYearRange']['startYear'],
+                                                data={'resourceId': self.session.get(f'https://disney.api.edge.bamgrid.com/explore/v1.2/deeplink?action=playback&refId={episode_num["id"]}&refIdType=deeplinkId').json()['data']['deeplink']['actions'][0]['resourceId']}
+                                                ))
+                    i += 1
+
+            # Return the episodes
+            return Series(all_episodes)
+
+    def get_tracks(self, title: Title_T) -> Tracks:
+
+        # Set the headers to grab the m3u
+        self.session.headers['x-dss-feature-filtering'] = 'true'
+        self.session.headers['x-application-version'] = '1.1.2'
+        self.session.headers['x-bamsdk-client-id'] = 'disney-svod'
+        self.session.headers['x-bamsdk-platform'] = 'javascript/windows/firefox'
+        self.session.headers['x-bamsdk-version'] = '28.0'
+
+        # Set the JSON to grab the m3u
+        json_data = {
+            'playback': {
+                'attributes': {
+                    'resolution': {
+                        'max': [
+                            '1280x720',
+                        ],
+                    },
+                    'protocol': 'HTTPS',
+                    'assetInsertionStrategy': 'SGAI',
+                    'playbackInitiationContext': 'ONLINE',
+                    'frameRates': [
+                        60,
+                    ],
+                },
+            },
+            'playbackId': f'{title.data["resourceId"]}',
+        }
+
+        # Grab the metadata
+        title_metadata = self.session.post(url='https://disney.playback.edge.bamgrid.com/v7/playback/ctr-limited', json=json_data).json()
+
+        # Grab the m3u
+        title_m3u = title_metadata['stream']['sources'][0]['complete']['url']
+
+        # Convert the m3u to tracks
+        tracks = HLS.from_url(url=title_m3u).to_tracks(language="en")
+
+        # Format the bitrate
+        for audio in tracks.audio:
+            bitrate = re.search(r"(?<=r/composite_)\d+|\d+(?=_complete.m3u8)", as_list(audio.url)[0])
+            audio.bitrate = int(bitrate.group()) * 10000
+
+        # Return the tracks
+        return tracks
+
+    def get_chapters(self, title: Title_T) -> Chapters:
+        return []
+
+    def get_widevine_license(self, *, challenge: bytes, title: Title_T, track: AnyTrack) -> Optional[Union[bytes, str]]:
+        return self.session.post(url='https://disney.playback.edge.bamgrid.com/widevine/v1/obtain-license', data=challenge).content

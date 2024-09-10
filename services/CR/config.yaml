@@ -1,0 +1,9 @@
+endpoints:
+  auth_url: https://beta-api.crunchyroll.com/auth/v1/token
+  series_metadata: https://beta-api.crunchyroll.com/content/v2/cms/series/{title}/seasons
+  episode_metadata: https://beta-api.crunchyroll.com/content/v2/cms/seasons/{season}/episodes
+  chapters_url: https://static.crunchyroll.com/skip-events/production/{id}.json
+  video_token: https://cr-play-service.prd.crunchyrollsvc.com/v1/{id}/android/phone/play
+  video_token_delete: https://cr-play-service.prd.crunchyrollsvc.com/v1/token/{title_id}/{video_token}
+  license_url: https://cr-license-proxy.prd.crunchyrollsvc.com/v1/license/widevine?specConform=true
+  search_url: https://beta-api.crunchyroll.com/content/v2/discover/search?q={search_keyword}

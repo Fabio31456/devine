@@ -1,0 +1,26 @@
+endpoints:
+  api_login: "https://www.iwanttfc.com/api/1.0/user/auth"
+  api_playback: "https://absprod-static.iwanttfc.com/c/6/catalog/{js}/item/{id}.json"
+  api_license: "https://www.iwanttfc.com/api/1.0/license"
+  api_subtitle: "https://absprod-static.iwanttfc.com/c/6/captions/{videoid}"
+  api_search: "https://4nzqf4xnoy-2.algolianet.com/1/indexes/*/queries?x-algolia-agent=Algolia%20for%20JavaScript%20(4.11.0)%3B%20Browser"
+
+browser:
+  headers:
+    sec-ch-ua: '"Not/A)Brand";v="99", "Google Chrome";v="115", "Chromium";v="115"'
+    Accept: "application/json, text/plain, */*"
+    Referer: "https://www.iwanttfc.com/"
+    sec-ch-ua-mobile: "?0"
+    user-agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
+    sec-ch-ua-platform: '"Windows"'
+
+search:
+  headers:
+    sec-ch-ua: '"Google Chrome";v="119", "Chromium";v="119", "Not?A_Brand";v="24"'
+    x-algolia-api-key: "e2f539d702376992de12e2042cdcda01"
+    sec-ch-ua-mobile: "?0"
+    User-Agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
+    content-type: "application/x-www-form-urlencoded"
+    x-algolia-application-id: "4NZQF4XNOY"
+    Referer: "https://www.iwanttfc.com/"
+    sec-ch-ua-platform: '"Windows"'
