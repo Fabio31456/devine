@@ -84,6 +84,12 @@ class dl:
     @click.option("-ab", "--abitrate", type=int,
                   default=None,
                   help="Audio Bitrate to download (in kbps), defaults to highest available.")
+    @click.option("-mv", "--maxvideo", type=int,
+                  default=None,
+                  help="Max Video Bitrate to download (in kbps), defaults to highest available.")
+    @click.option("-ma", "--maxaudio", type=int,
+                  default=None,
+                  help="Max Audio Bitrate to download (in kbps), defaults to highest available.")
     @click.option("-r", "--range", "range_", type=MultipleChoice(Video.Range, case_sensitive=False),
                   default=[Video.Range.SDR],
                   help="Video Color Range(s) to download, defaults to SDR.")
@@ -178,10 +184,9 @@ class dl:
             except ValueError as e:
                 self.log.error(f"Failed to load Widevine CDM, {e}")
                 sys.exit(1)
-            if self.cdm:
-                self.log.info(
-                    f"Loaded {self.cdm.__class__.__name__} Widevine CDM: {self.cdm.system_id} (L{self.cdm.security_level})"
-                )
+            self.log.info(
+                f"Loaded {self.cdm.__class__.__name__} Widevine CDM: {self.cdm.system_id} (L{self.cdm.security_level})"
+            )
 
         with console.status("Loading Key Vaults...", spinner="dots"):
             self.vaults = Vaults(self.service)
@@ -260,6 +265,8 @@ class dl:
         acodec: Optional[Audio.Codec],
         vbitrate: int,
         abitrate: int,
+        maxvideo: int,
+        maxaudio: int,
         range_: list[Video.Range],
         channels: float,
         wanted: list[str],
@@ -395,6 +402,12 @@ class dl:
                         if not title.tracks.videos:
                             self.log.error(f"There's no {vbitrate}kbps Video Track...")
                             sys.exit(1)
+                            
+                    if maxvideo:
+                        title.tracks.select_video(lambda x: x.bitrate and x.bitrate // 1000 < maxvideo)
+                        if not title.tracks.videos:
+                            self.log.error(f"There's no lower than {maxvideo}kbps Video Track...")
+                            sys.exit(1)
 
                     video_languages = v_lang or lang
                     if video_languages and "all" not in video_languages:
@@ -464,6 +477,11 @@ class dl:
                         title.tracks.select_audio(lambda x: x.bitrate and x.bitrate // 1000 == abitrate)
                         if not title.tracks.audio:
                             self.log.error(f"There's no {abitrate}kbps Audio Track...")
+                            sys.exit(1)
+                    if maxaudio:
+                        title.tracks.select_audio(lambda x: x.bitrate and x.bitrate // 1000 < maxaudio)
+                        if not title.tracks.audio:
+                            self.log.error(f"There's no lower than {maxaudio}kbps Audio Track...")
                             sys.exit(1)
                     if channels:
                         title.tracks.select_audio(lambda x: math.ceil(x.channels) == math.ceil(channels))
@@ -702,22 +720,16 @@ class dl:
                     ):
                         for task_id, task_tracks in multiplex_tasks:
                             progress.start_task(task_id)  # TODO: Needed?
-                            muxed_path, return_code, errors = task_tracks.mux(
+                            muxed_path, return_code = task_tracks.mux(
                                 str(title),
                                 progress=partial(progress.update, task_id=task_id),
                                 delete=False
                             )
                             muxed_paths.append(muxed_path)
-                            if return_code >= 2:
-                                self.log.error(f"Failed to Mux video to Matroska file ({return_code}):")
-                            elif return_code == 1 or errors:
-                                self.log.warning("mkvmerge had at least one warning or error, continuing anyway...")
-                            for line in errors:
-                                if line.startswith("#GUI#error"):
-                                    self.log.error(line)
-                                else:
-                                    self.log.warning(line)
-                            if return_code >= 2:
+                            if return_code == 1:
+                                self.log.warning("mkvmerge had at least one warning, will continue anyway...")
+                            elif return_code >= 2:
+                                self.log.error(f"Failed to Mux video to Matroska file ({return_code})")
                                 sys.exit(1)
                             for video_track in task_tracks.videos:
                                 video_track.delete()
@@ -937,21 +949,21 @@ class dl:
                 return Credential.loads(credentials)  # type: ignore
 
     @staticmethod
-    def get_cdm(service: str, profile: Optional[str] = None) -> Optional[WidevineCdm]:
+    def get_cdm(service: str, profile: Optional[str] = None) -> WidevineCdm:
         """
         Get CDM for a specified service (either Local or Remote CDM).
         Raises a ValueError if there's a problem getting a CDM.
         """
         cdm_name = config.cdm.get(service) or config.cdm.get("default")
         if not cdm_name:
-            return None
+            raise ValueError("A CDM to use wasn't listed in the config")
 
         if isinstance(cdm_name, dict):
             if not profile:
-                return None
+                raise ValueError("CDM config is mapped for profiles, but no profile was chosen")
             cdm_name = cdm_name.get(profile) or config.cdm.get("default")
             if not cdm_name:
-                return None
+                raise ValueError(f"A CDM to use was not mapped for the profile {profile}")
 
         cdm_api = next(iter(x for x in config.remote_cdm if x["name"] == cdm_name), None)
         if cdm_api:
