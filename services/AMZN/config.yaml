@@ -1,0 +1,3 @@
+endpoints:
+  details: https://www.amazon.com/gp/video/api/getDetailPage
+  playback: https://atv-ps.amazon.com/cdp/catalog/GetPlaybackResources
